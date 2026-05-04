@@ -1,0 +1,66 @@
+# Drop this into your existing nginx as e.g. /etc/nginx/sites-available/voicenote,
+# then `ln -s ../sites-available/voicenote /etc/nginx/sites-enabled/` and `nginx -s reload`.
+#
+# Replace voicenote.example.com with your real hostname.
+# voicenote already binds to 127.0.0.1:8732 via docker-compose.
+
+# --- Optional rate limit zone (define once at the http {} level if not already) ---
+# limit_req_zone $binary_remote_addr zone=voicenote_login:10m rate=8r/m;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name voicenote.example.com;
+
+    # If you use certbot, uncomment after the cert is issued:
+    # return 301 https://$host$request_uri;
+
+    # --- Plain-HTTP block; replace with TLS block below in production ---
+    client_max_body_size 220m;
+    proxy_read_timeout   3600s;
+    proxy_send_timeout   3600s;
+
+    # Throttle login attempts a bit
+    location = /v1/auth/login {
+        # limit_req zone=voicenote_login burst=4 nodelay;
+        proxy_pass http://127.0.0.1:8732;
+        include /etc/nginx/proxy_params;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8732;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection        "";
+    }
+}
+
+# --- TLS variant (preferred). Run: certbot --nginx -d voicenote.example.com ---
+#
+# server {
+#     listen 443 ssl http2;
+#     listen [::]:443 ssl http2;
+#     server_name voicenote.example.com;
+#
+#     ssl_certificate     /etc/letsencrypt/live/voicenote.example.com/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/voicenote.example.com/privkey.pem;
+#
+#     client_max_body_size 220m;
+#     proxy_read_timeout   3600s;
+#     proxy_send_timeout   3600s;
+#
+#     location / {
+#         proxy_pass http://127.0.0.1:8732;
+#         proxy_http_version 1.1;
+#         proxy_set_header Host              $host;
+#         proxy_set_header X-Real-IP         $remote_addr;
+#         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#         proxy_set_header Connection        "";
+#     }
+# }
+#
+# Once HTTPS is live, set VN_COOKIE_SECURE=true in .env and `docker compose up -d`.

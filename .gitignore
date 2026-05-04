@@ -1,0 +1,32 @@
+# Models — large binary blobs, downloaded separately
+models/*
+!models/.gitkeep
+!models/README.md
+
+# Data — SQLite DB, user uploads
+data/*
+!data/.gitkeep
+
+# Local env
+.env
+.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.eggs/
+dist/
+build/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Docker
+*.tar

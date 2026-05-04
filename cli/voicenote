@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""
+voicenote — CLI client for the voicenote API.
+
+Quickstart:
+  # First time on a new machine: store server + API key
+  voicenote login --server https://voicenote.example.com --key vn_xxxxxxxxxx
+
+  # Transcribe a file (defaults: voxtral engine, auto-detect language)
+  voicenote transcribe ~/Desktop/note.m4a
+  voicenote transcribe note.m4a --engine whisper --lang nl
+  voicenote transcribe note.m4a --output transcript.txt
+  voicenote transcribe note.m4a --json
+
+  # List recent transcripts
+  voicenote list
+  voicenote get 42
+  voicenote rm 42
+
+Auth precedence: --key > $VOICENOTE_API_KEY > ~/.config/voicenote/config.json
+Server precedence: --server > $VOICENOTE_SERVER > config file > http://localhost:8732
+"""
+from __future__ import annotations
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from urllib import error as urlerror
+from urllib import request
+from urllib.parse import urlencode
+
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "voicenote"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+
+def load_config() -> dict:
+    if not CONFIG_FILE.exists():
+        return {}
+    try:
+        return json.loads(CONFIG_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def save_config(cfg: dict) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    try:
+        CONFIG_FILE.chmod(0o600)
+    except Exception:
+        pass
+
+
+def resolve_auth(args) -> tuple[str, str]:
+    cfg = load_config()
+    server = (
+        getattr(args, "server", None)
+        or os.environ.get("VOICENOTE_SERVER")
+        or cfg.get("server")
+        or "http://localhost:8732"
+    ).rstrip("/")
+    key = (
+        getattr(args, "key", None)
+        or os.environ.get("VOICENOTE_API_KEY")
+        or cfg.get("api_key")
+        or ""
+    )
+    return server, key
+
+
+def _request(method: str, url: str, key: str, *, data: bytes | None = None,
+             headers: dict | None = None, timeout: int = 60 * 60 * 3) -> dict | bytes:
+    req = request.Request(url, data=data, method=method)
+    if key:
+        req.add_header("Authorization", f"Bearer {key}")
+    if headers:
+        for k, v in headers.items():
+            req.add_header(k, v)
+    try:
+        with request.urlopen(req, timeout=timeout) as r:
+            body = r.read()
+            ctype = r.headers.get("Content-Type", "")
+            if "application/json" in ctype:
+                return json.loads(body or b"null")
+            return body
+    except urlerror.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+        try:
+            j = json.loads(body)
+            msg = j.get("detail") or j.get("error") or body
+        except Exception:
+            msg = body
+        die(f"HTTP {e.code}: {msg}")
+    except urlerror.URLError as e:
+        die(f"network error: {e.reason}")
+
+
+def die(msg: str, code: int = 1) -> None:
+    print(f"voicenote: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+# ---------- multipart helper (stdlib only) ----------
+def _safe_filename(name: str) -> str:
+    """Strip CR/LF/quotes per RFC 7578 so a hostile filename cannot inject
+    headers. Replaces unsafe chars with '_'; truncates to 200 chars."""
+    safe = "".join("_" if c in "\r\n\"\\" or ord(c) < 0x20 else c for c in name)
+    return (safe or "audio")[:200]
+
+
+def build_multipart(fields: dict[str, str], file_path: Path, file_field: str = "audio") -> tuple[bytes, str]:
+    boundary = "----voicenote" + os.urandom(8).hex()
+    crlf = b"\r\n"
+    safe_name = _safe_filename(file_path.name)
+    parts: list[bytes] = []
+    for k, v in fields.items():
+        safe_k = _safe_filename(str(k))
+        parts.append(f"--{boundary}".encode())
+        parts.append(f'Content-Disposition: form-data; name="{safe_k}"'.encode())
+        parts.append(b"")
+        parts.append(str(v).encode("utf-8"))
+    parts.append(f"--{boundary}".encode())
+    parts.append(
+        f'Content-Disposition: form-data; name="{file_field}"; filename="{safe_name}"'.encode()
+    )
+    parts.append(b"Content-Type: application/octet-stream")
+    parts.append(b"")
+    parts.append(file_path.read_bytes())
+    parts.append(f"--{boundary}--".encode())
+    parts.append(b"")
+    body = crlf.join(parts)
+    return body, f"multipart/form-data; boundary={boundary}"
+
+
+# ---------- commands ----------
+def cmd_login(args) -> None:
+    cfg = load_config()
+    if args.server:
+        cfg["server"] = args.server.rstrip("/")
+    if args.key:
+        cfg["api_key"] = args.key
+    if not cfg.get("server"):
+        die("server required (--server or VOICENOTE_SERVER)")
+    if not cfg.get("api_key"):
+        die("api key required (--key or VOICENOTE_API_KEY)")
+    save_config(cfg)
+    print(f"saved → {CONFIG_FILE}")
+    # Validate
+    me = _request("GET", f"{cfg['server']}/v1/me", cfg["api_key"])
+    if isinstance(me, dict):
+        print(f"logged in as {me.get('username')} ({me.get('display_name')})")
+
+
+def cmd_transcribe(args) -> None:
+    server, key = resolve_auth(args)
+    if not key:
+        die("no api key — run `voicenote login --server ... --key vn_...`")
+    p = Path(args.path).expanduser().resolve()
+    if not p.is_file():
+        die(f"not a file: {p}")
+    fields = {"engine": args.engine, "language": args.lang}
+    body, ctype = build_multipart(fields, p)
+    print(f"→ uploading {p.name} ({len(body)/1024/1024:.1f} MB) to {server}", file=sys.stderr)
+    res = _request("POST", f"{server}/v1/transcribe", key,
+                   data=body, headers={"Content-Type": ctype}, timeout=args.timeout)
+    if not isinstance(res, dict):
+        die("unexpected response")
+    if args.json:
+        json.dump(res, sys.stdout, ensure_ascii=False, indent=2)
+        print()
+        return
+    text = res.get("text", "")
+    if args.output:
+        Path(args.output).write_text(text + "\n", encoding="utf-8")
+        print(f"saved → {args.output}", file=sys.stderr)
+    else:
+        sys.stdout.write(text + "\n")
+    fb = " (fallback)" if res.get("fallback_used") else ""
+    print(f"engine={res.get('engine')}{fb} lang={res.get('language')} "
+          f"id={res.get('id')} duration={res.get('duration_sec')}", file=sys.stderr)
+
+
+def cmd_list(args) -> None:
+    server, key = resolve_auth(args)
+    qs = urlencode({"limit": args.limit, "offset": args.offset})
+    res = _request("GET", f"{server}/v1/transcripts?{qs}", key)
+    if args.json:
+        json.dump(res, sys.stdout, ensure_ascii=False, indent=2)
+        print()
+        return
+    for it in (res or {}).get("items", []):
+        snippet = (it.get("snippet") or "").replace("\n", " ")[:80]
+        print(f"{it['id']:>5}  {it['created_at'][:19]}  "
+              f"{it['language']:<5} {it['engine']:<7}  "
+              f"{it['original_filename'][:40]:<40}  {snippet}")
+
+
+def cmd_get(args) -> None:
+    server, key = resolve_auth(args)
+    res = _request("GET", f"{server}/v1/transcripts/{args.id}", key)
+    if args.json or not isinstance(res, dict):
+        json.dump(res, sys.stdout, ensure_ascii=False, indent=2)
+        print()
+        return
+    sys.stdout.write((res.get("text") or "") + "\n")
+
+
+def cmd_rm(args) -> None:
+    server, key = resolve_auth(args)
+    _request("DELETE", f"{server}/v1/transcripts/{args.id}", key)
+    print(f"deleted #{args.id}")
+
+
+def cmd_health(args) -> None:
+    server, _ = resolve_auth(args)
+    res = _request("GET", f"{server}/v1/health", "")
+    json.dump(res, sys.stdout, ensure_ascii=False, indent=2)
+    print()
+
+
+# ---------- main ----------
+def main() -> None:
+    p = argparse.ArgumentParser(prog="voicenote",
+                                description="voicenote CLI — transcribe audio via the voicenote API")
+    p.add_argument("--server", help="API base URL (e.g. https://voicenote.example.com)")
+    p.add_argument("--key", help="API key (vn_...)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("login", help="store server + API key in ~/.config/voicenote/config.json")
+    sp.set_defaults(func=cmd_login)
+
+    sp = sub.add_parser("transcribe", help="upload an audio file and print the transcript")
+    sp.add_argument("path", help="audio file (m4a/mp3/wav/ogg/opus/flac/webm)")
+    sp.add_argument("--engine", choices=["parakeet", "whisper", "voxtral", "auto"], default="auto",
+                    help="transcription engine (default: server default — parakeet)")
+    sp.add_argument("--lang", default="auto",
+                    help="language hint (auto, nl, en, fr, de, ...)")
+    sp.add_argument("--output", "-o", help="write transcript to file (default: stdout)")
+    sp.add_argument("--json", action="store_true", help="print full JSON response")
+    sp.add_argument("--timeout", type=int, default=3 * 60 * 60, help="request timeout (sec)")
+    sp.set_defaults(func=cmd_transcribe)
+
+    sp = sub.add_parser("list", help="list recent transcripts")
+    sp.add_argument("--limit", type=int, default=20)
+    sp.add_argument("--offset", type=int, default=0)
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_list)
+
+    sp = sub.add_parser("get", help="fetch a transcript by id")
+    sp.add_argument("id", type=int)
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_get)
+
+    sp = sub.add_parser("rm", help="delete a transcript by id")
+    sp.add_argument("id", type=int)
+    sp.set_defaults(func=cmd_rm)
+
+    sp = sub.add_parser("health", help="check server health")
+    sp.set_defaults(func=cmd_health)
+
+    args = p.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#F5EDE0">
+  <meta name="description" content="voicenote — spraak naar tekst, eenvoudig en mooi.">
+  <title>voicenote — spraak naar tekst</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Crimson+Pro:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+  <link rel="stylesheet" href="./style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23F5EDE0'/%3E%3Cg fill='%23C8553D'%3E%3Crect x='8' y='12' width='3' height='8' rx='1.5'/%3E%3Crect x='14' y='8' width='3' height='16' rx='1.5'/%3E%3Crect x='20' y='14' width='3' height='4' rx='1.5'/%3E%3C/g%3E%3C/svg%3E">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="header">
+    <div class="header-row">
+      <a class="wordmark" href="/" aria-label="voicenote — naar startpagina">
+        <span class="wordmark-icon" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span class="wordmark-text"><i>voice</i>note</span>
+      </a>
+      <div class="header-actions" id="header-actions" hidden>
+        <button type="button" class="header-link" id="history-btn"
+                aria-label="Toon geschiedenis">
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+            <path d="M3 10a7 7 0 1 0 2-5M3 5v4h4M10 6v5l3 2" fill="none"
+                  stroke="currentColor" stroke-width="1.6"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>Geschiedenis</span>
+        </button>
+        <div class="user-pill" id="user-pill">
+          <button type="button" class="user-btn" id="user-btn"
+                  aria-haspopup="true" aria-expanded="false">
+            <span class="user-name" id="user-name">—</span>
+            <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+              <path d="M5 8l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <div class="user-menu" id="user-menu" role="menu" hidden>
+            <button type="button" class="user-menu-item" id="logout-btn" role="menuitem">
+              <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+                <path d="M12 4h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3M9 14l-4-4 4-4M5 10h9"
+                      fill="none" stroke="currentColor" stroke-width="1.6"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              Uitloggen
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="tagline">Jouw stem, in tekst. Rustig en zorgvuldig.</p>
+  </header>
+
+  <main class="page">
+    <section class="upload" id="upload" aria-labelledby="upload-title">
+      <h1 id="upload-title" class="visually-hidden">Audio uploaden</h1>
+
+      <label class="dropzone" id="dropzone" for="file-input">
+        <input type="file" id="file-input" name="audio"
+               accept=".m4a,.mp3,.wav,.ogg,.opus,.flac,.webm,.mp4,.mpga,.mpeg,audio/*" hidden>
+        <div class="dropzone-inner">
+          <div class="dropzone-icon" aria-hidden="true">
+            <svg viewBox="0 0 80 80" width="68" height="68" fill="none" stroke="currentColor"
+                 stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M40 14c-15 0-26 11-26 26 0 13 9 22 18 22 5 0 8-3 8-7"/>
+              <path d="M40 24c-9 0-15 7-15 16 0 8 5 13 11 13"/>
+              <circle cx="40" cy="40" r="5" fill="currentColor"/>
+              <path d="M58 28l4-3M62 40h5M58 52l4 3" opacity="0.55"/>
+            </svg>
+          </div>
+          <p class="dropzone-title">Sleep een audiobestand hierheen</p>
+          <p class="dropzone-sub">of <strong>klik om te kiezen</strong></p>
+          <p class="dropzone-formats">m4a · mp3 · wav · ogg · opus · flac</p>
+        </div>
+      </label>
+
+      <div class="settings settings-single" role="group" aria-label="Instellingen">
+        <div class="setting">
+          <label class="setting-label" for="lang">Taal</label>
+          <div class="select-wrap">
+            <select id="lang" class="select">
+              <option value="auto">Automatisch herkennen</option>
+              <option value="nl" selected>Nederlands</option>
+              <option value="en">English</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+            </select>
+            <svg class="select-caret" viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M5 8l5 5 5-5" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <p class="setting-help">Tip voor de beste tekst</p>
+        </div>
+      </div>
+
+      <button type="button" class="submit" id="submit-btn" disabled>
+        <span class="submit-label">Transcribeer</span>
+        <span class="submit-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <p class="hint" id="hint">Kies een audiobestand om te beginnen.</p>
+
+      <p class="upload-history-link">
+        <button type="button" class="text-link" id="history-from-upload">
+          Of bekijk eerdere transcripten →
+        </button>
+      </p>
+    </section>
+
+    <section class="progress" id="progress" hidden aria-live="polite">
+      <div class="bars" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+      <p class="progress-text" id="progress-text">Een moment, ik luister mee…</p>
+      <p class="progress-sub" id="progress-sub"></p>
+      <button type="button" class="action ghost cancel" id="cancel-btn">Annuleren</button>
+    </section>
+
+    <section class="result" id="result" hidden aria-live="polite">
+      <div class="result-meta">
+        <span class="badge" id="meta-engine">—</span>
+        <span class="badge" id="meta-lang">—</span>
+        <span class="badge" id="meta-duration">—</span>
+        <span class="badge fallback" id="meta-fallback" hidden>fallback gebruikt</span>
+      </div>
+      <h2 class="result-title">Transcript</h2>
+      <article class="transcript" id="transcript"></article>
+      <div class="result-actions">
+        <button type="button" class="action" id="copy-btn">
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+            <rect x="6" y="6" width="11" height="11" rx="2" fill="none"
+                  stroke="currentColor" stroke-width="1.6"/>
+            <path d="M3 14V4a1 1 0 0 1 1-1h10" fill="none"
+                  stroke="currentColor" stroke-width="1.6"/>
+          </svg>
+          <span>Kopiëren</span>
+        </button>
+        <button type="button" class="action" id="download-btn">
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+            <path d="M10 3v10m0 0l-4-4m4 4l4-4M4 17h12" fill="none"
+                  stroke="currentColor" stroke-width="1.6"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>Downloaden</span>
+        </button>
+        <button type="button" class="action ghost" id="reset-btn">Nieuw bestand</button>
+        <button type="button" class="action ghost" id="history-from-result">Geschiedenis</button>
+      </div>
+    </section>
+
+    <section class="history" id="history" hidden aria-labelledby="history-title">
+      <div class="history-head">
+        <h2 class="history-title" id="history-title">Eerder gemaakt</h2>
+        <button type="button" class="action ghost small" id="history-close">Sluiten</button>
+      </div>
+      <div class="history-list" id="history-list">
+        <p class="history-empty" id="history-empty">Nog niets om te tonen.</p>
+      </div>
+    </section>
+
+    <section class="error" id="error" hidden role="alert">
+      <p class="error-title">Er ging iets mis.</p>
+      <p class="error-text" id="error-text"></p>
+      <button type="button" class="action ghost" id="error-reset">Opnieuw proberen</button>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Lokaal gehost · Parakeet · gemaakt voor mama</p>
+  </footer>
+
+  <script src="./app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+# voicenote — single service. Image is self-contained: models, web files,
+# and code are baked in. Only the SQLite DB persists in a named volume so it
+# survives `docker compose down` / image rebuilds.
+#
+# Works identically on Mac, Linux server, or any remote Docker daemon —
+# no bind mounts that depend on the daemon-host's filesystem layout.
+
+services:
+  voicenote:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      # To also bake in Whisper as a fallback (~1.1 GB extra), build with:
+      #   docker compose build --build-arg INCLUDE_WHISPER=true
+      args:
+        INCLUDE_WHISPER: ${INCLUDE_WHISPER:-false}
+    image: voicenote:local
+    container_name: voicenote
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8732:8732"
+    volumes:
+      - voicenote-data:/data
+    environment:
+      VN_SECRET_KEY: ${VN_SECRET_KEY:-change-me-in-production}
+      VN_DEFAULT_ENGINE: ${VN_DEFAULT_ENGINE:-parakeet}
+      VN_FALLBACK_CHAIN: ${VN_FALLBACK_CHAIN:-whisper}
+      VN_INFERENCE_THREADS: ${VN_INFERENCE_THREADS:-3}
+      VN_MAX_CONCURRENT_JOBS: ${VN_MAX_CONCURRENT_JOBS:-1}
+      VN_USE_VAD: ${VN_USE_VAD:-true}
+      VN_MAX_UPLOAD_MB: ${VN_MAX_UPLOAD_MB:-200}
+      VN_MAX_AUDIO_MINUTES: ${VN_MAX_AUDIO_MINUTES:-180}
+      VN_COOKIE_SECURE: ${VN_COOKIE_SECURE:-false}
+    deploy:
+      resources:
+        limits:
+          cpus: "${VN_CPU_LIMIT:-3}"
+          memory: ${VN_MEM_LIMIT:-6g}
+
+volumes:
+  voicenote-data:
