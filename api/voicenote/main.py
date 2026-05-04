@@ -1,4 +1,6 @@
 from __future__ import annotations
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,8 +11,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
+from . import jobs as job_mod
 from .db import init_db
 from .routes import auth, health, transcribe, transcripts
+from .routes import jobs as jobs_routes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,11 +26,23 @@ log = logging.getLogger("voicenote")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    cleanup_task = asyncio.create_task(_periodic_job_cleanup())
     log.info(
         "voicenote ready · db=%s · models=%s · default_engine=%s",
         settings.database_url, settings.models_dir, settings.default_engine,
     )
-    yield
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cleanup_task
+
+
+async def _periodic_job_cleanup() -> None:
+    while True:
+        await asyncio.sleep(3600)
+        await job_mod.cleanup_old_jobs()
 
 
 def create_app() -> FastAPI:
@@ -51,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(transcribe.router)
     app.include_router(transcripts.router)
+    app.include_router(jobs_routes.router)
 
     @app.exception_handler(404)
     async def _404(_request, exc):
