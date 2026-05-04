@@ -84,26 +84,69 @@
     return '';
   }
 
+  function setNoEngineState(reason) {
+    // Lock the upload flow when no engine can actually run.
+    state.file = null;
+    if (els.fileInput) els.fileInput.value = '';
+    if (els.dropzone) {
+      els.dropzone.classList.remove('has-file');
+      els.dropzone.style.pointerEvents = 'none';
+      els.dropzone.style.opacity = '0.55';
+    }
+    if (els.submitBtn) els.submitBtn.disabled = true;
+    if (els.hint) {
+      els.hint.textContent = reason;
+      els.hint.classList.remove('has-file');
+      els.hint.style.color = 'var(--accent-deep)';
+    }
+  }
+
+  function clearNoEngineState() {
+    if (els.dropzone) {
+      els.dropzone.style.pointerEvents = '';
+      els.dropzone.style.opacity = '';
+    }
+    if (els.hint) {
+      els.hint.style.color = '';
+      if (!state.file) els.hint.textContent = 'Kies een audiobestand om te beginnen.';
+    }
+  }
+
   async function refreshEngineAvailability() {
+    let ready = null;
     try {
-      const r = await fetch('/v1/health');
-      if (!r.ok) return;
-      const j = await r.json();
-      const ready = j?.engines || {};
-      document.querySelectorAll('.seg').forEach((seg) => {
-        const name = seg.dataset.engine;
-        const ok = !!ready?.[name]?.ready;
-        seg.disabled = !ok;
-        seg.title = ok ? '' : 'Niet beschikbaar — bouw image opnieuw met dit engine erbij';
-        seg.style.opacity = ok ? '' : '0.45';
-      });
-      // If the active engine isn't ready, switch to the first ready one.
-      const activeBtn = document.querySelector('.seg.active');
-      if (activeBtn && activeBtn.disabled) {
-        const fallback = Array.from(document.querySelectorAll('.seg')).find((s) => !s.disabled);
-        if (fallback) fallback.click();
-      }
+      const r = await fetch('/v1/health', { credentials: 'same-origin' });
+      if (r.ok) ready = (await r.json())?.engines || {};
     } catch (_) {}
+
+    if (!ready) {
+      setNoEngineState('Server niet bereikbaar — probeer het later opnieuw.');
+      return;
+    }
+
+    const segs = Array.from(document.querySelectorAll('.seg'));
+    let anyReady = false;
+    segs.forEach((seg) => {
+      const name = seg.dataset.engine;
+      const ok = !!ready?.[name]?.ready;
+      if (ok) anyReady = true;
+      seg.disabled = !ok;
+      seg.title = ok ? '' : 'Niet beschikbaar — bouw image opnieuw met dit engine erbij';
+      seg.style.opacity = ok ? '' : '0.45';
+    });
+
+    if (!anyReady) {
+      setNoEngineState('Geen transcribeer-engine beschikbaar. Neem contact op met de beheerder.');
+      return;
+    }
+    clearNoEngineState();
+
+    // If the active engine isn't ready, switch to the first ready one.
+    const activeBtn = document.querySelector('.seg.active');
+    if (activeBtn && activeBtn.disabled) {
+      const fallback = segs.find((s) => !s.disabled);
+      if (fallback) fallback.click();
+    }
   }
 
   // ----- File handling -----

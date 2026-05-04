@@ -72,12 +72,10 @@ COPY --from=whisper-builder /usr/local/bin/whisper-cli /usr/local/bin/whisper-cl
 COPY --from=whisper-builder /out/lib/                  /usr/local/lib/
 RUN ldconfig
 
-# Pre-baked models — image is now self-contained
-COPY --from=models /models /models
-
 WORKDIR /app
 
-# Python deps
+# Python deps — kept ABOVE the models COPY so flipping INCLUDE_WHISPER
+# doesn't invalidate the pip-install layer and force a re-install.
 COPY api/pyproject.toml /app/pyproject.toml
 RUN pip install --upgrade pip && \
     pip install \
@@ -87,7 +85,10 @@ RUN pip install --upgrade pip && \
       "bcrypt>=4.2" "itsdangerous>=2.2" "httpx>=0.27" \
       "numpy>=1.26" "sherpa-onnx>=1.10"
 
-# App code + web files (always baked in — no bind-mount surprises)
+# Pre-baked models — image self-contained, no bind mounts needed
+COPY --from=models /models /models
+
+# App code + web files
 COPY api/voicenote /app/voicenote
 COPY web           /app/web
 

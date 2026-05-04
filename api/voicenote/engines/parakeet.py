@@ -146,9 +146,13 @@ class ParakeetEngine:
 
         i = 0
         n = len(samples)
-        while i + window_size < n:
-            vad.accept_waveform(samples[i : i + window_size])
-            i += window_size
+        # Walk the entire buffer including the final partial window — the
+        # previous `i + window_size < n` would silently drop end-of-audio
+        # speech that landed in a tail shorter than the silero window.
+        while i < n:
+            end = min(i + window_size, n)
+            vad.accept_waveform(samples[i:end])
+            i = end
             drain(flush=False)
 
         drain(flush=True)
