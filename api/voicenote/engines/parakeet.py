@@ -1,10 +1,30 @@
 from __future__ import annotations
 import asyncio
+import wave
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from ..config import settings
 from .base import EngineResult, Segment
+
+
+def _read_wav_mono_16k(path: Path) -> tuple[np.ndarray, int]:
+    """Read a 16-bit PCM mono wav (as produced by audio.to_wav_16k_mono).
+    Returns (float32 samples in [-1, 1], sample_rate)."""
+    with wave.open(str(path), "rb") as wf:
+        sr = wf.getframerate()
+        n_frames = wf.getnframes()
+        sampwidth = wf.getsampwidth()
+        n_channels = wf.getnchannels()
+        raw = wf.readframes(n_frames)
+    if sampwidth != 2:
+        raise RuntimeError(f"expected 16-bit PCM, got {sampwidth * 8}-bit")
+    samples = np.frombuffer(raw, dtype=np.int16)
+    if n_channels > 1:
+        samples = samples.reshape(-1, n_channels).mean(axis=1).astype(np.int16)
+    return samples.astype(np.float32) / 32768.0, sr
 
 
 class ParakeetEngine:
@@ -69,9 +89,8 @@ class ParakeetEngine:
             raise RuntimeError(f"parakeet inference timed out after {timeout}s")
 
     def _transcribe_sync(self, wav_path: Path) -> EngineResult:
-        import sherpa_onnx
         self._load()
-        samples, sr = sherpa_onnx.read_wave(str(wav_path))
+        samples, sr = _read_wav_mono_16k(wav_path)
         # Use VAD-based chunking for anything longer than ~30s.
         duration = len(samples) / float(sr) if sr else 0.0
         if self._vad_config is not None and duration > 30.0:

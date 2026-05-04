@@ -19,7 +19,7 @@
     error: $('error'), history: $('history'),
     dropzone: $('dropzone'), fileInput: $('file-input'),
     submitBtn: $('submit-btn'), cancelBtn: $('cancel-btn'),
-    hint: $('hint'),
+    hint: $('hint'), engineHelp: $('engine-help'),
     langSelect: $('lang'),
     progressText: $('progress-text'), progressSub: $('progress-sub'),
     metaLang: $('meta-lang'), metaEngine: $('meta-engine'),
@@ -38,11 +38,9 @@
     historyEmpty: $('history-empty'),
   };
 
-  // The web UI always asks the server to use its default engine (Parakeet on
-  // a normal install). Whisper stays available via the CLI / API for power use,
-  // but the web flow keeps things simple: upload → transcript.
   const state = {
     file: null,
+    engine: 'parakeet',
     abort: null,
     user: null,
     transcriptText: '',
@@ -65,7 +63,48 @@
     }
   }
 
-  // (Engine selection UI removed — server picks the default engine.)
+  // ----- Engine selection -----
+  document.querySelectorAll('.seg').forEach((seg) => {
+    seg.addEventListener('click', () => {
+      if (seg.disabled) return;
+      document.querySelectorAll('.seg').forEach((s) => {
+        const active = s === seg;
+        s.classList.toggle('active', active);
+        s.setAttribute('aria-checked', active ? 'true' : 'false');
+      });
+      state.engine = seg.dataset.engine;
+      if (els.engineHelp) els.engineHelp.textContent = engineHelpText(state.engine);
+    });
+  });
+
+  function engineHelpText(e) {
+    if (e === 'parakeet') return 'Parakeet · razendsnel, goed multilingual';
+    if (e === 'whisper')  return 'Whisper · trager, sterk in Nederlands';
+    if (e === 'voxtral')  return 'Voxtral · audio-LLM, experimenteel';
+    return '';
+  }
+
+  async function refreshEngineAvailability() {
+    try {
+      const r = await fetch('/v1/health');
+      if (!r.ok) return;
+      const j = await r.json();
+      const ready = j?.engines || {};
+      document.querySelectorAll('.seg').forEach((seg) => {
+        const name = seg.dataset.engine;
+        const ok = !!ready?.[name]?.ready;
+        seg.disabled = !ok;
+        seg.title = ok ? '' : 'Niet beschikbaar — bouw image opnieuw met dit engine erbij';
+        seg.style.opacity = ok ? '' : '0.45';
+      });
+      // If the active engine isn't ready, switch to the first ready one.
+      const activeBtn = document.querySelector('.seg.active');
+      if (activeBtn && activeBtn.disabled) {
+        const fallback = Array.from(document.querySelectorAll('.seg')).find((s) => !s.disabled);
+        if (fallback) fallback.click();
+      }
+    } catch (_) {}
+  }
 
   // ----- File handling -----
   function setFile(file) {
@@ -136,18 +175,18 @@
     if (!state.file) return;
     showOnly(els.progress);
     els.progressText.textContent = 'Een moment, ik luister mee…';
-    els.progressSub.textContent = 'Dit duurt meestal kort';
+    els.progressSub.textContent = `Met ${engineLabel(state.engine)} · dit duurt meestal kort`;
 
     const fd = new FormData();
     fd.append('audio', state.file);
-    fd.append('engine', 'auto');
+    fd.append('engine', state.engine);
     fd.append('language', els.langSelect.value);
 
     state.abort = new AbortController();
     const tStart = Date.now();
     const tick = setInterval(() => {
       const sec = Math.round((Date.now() - tStart) / 1000);
-      els.progressSub.textContent = `${formatTime(sec)} bezig`;
+      els.progressSub.textContent = `Met ${engineLabel(state.engine)} · ${formatTime(sec)} bezig`;
     }, 1000);
 
     try {
@@ -182,7 +221,7 @@
   }
 
   function engineLabel(e) {
-    return ({ parakeet: 'Snel', whisper: 'Zorgvuldig', voxtral: 'Voxtral' })[e] || e;
+    return ({ parakeet: 'Snel', whisper: 'Zorgvuldig', voxtral: 'Voxtral' })[e] || e || 'Snel';
   }
   function langLabel(c) {
     return ({ nl: 'Nederlands', en: 'English', fr: 'Français', de: 'Deutsch', auto: 'Automatisch' })[c] || c;
@@ -448,5 +487,5 @@
     els.submitBtn.click();
   });
 
-  bootstrap();
+  bootstrap().then(() => { refreshEngineAvailability(); });
 })();

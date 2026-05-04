@@ -81,7 +81,24 @@
         </div>
       </label>
 
-      <div class="settings settings-single" role="group" aria-label="Instellingen">
+      <div class="settings" role="group" aria-label="Instellingen">
+        <div class="setting">
+          <span class="setting-label">Kwaliteit</span>
+          <div class="segmented" role="radiogroup" aria-label="Transcriptiemotor" id="engine-segments">
+            <button type="button" class="seg active" data-engine="parakeet"
+                    role="radio" aria-checked="true">
+              <span class="seg-dot" aria-hidden="true"></span>
+              Snel
+            </button>
+            <button type="button" class="seg" data-engine="whisper"
+                    role="radio" aria-checked="false">
+              <span class="seg-dot" aria-hidden="true"></span>
+              Zorgvuldig
+            </button>
+          </div>
+          <p class="setting-help" id="engine-help">Parakeet · razendsnel, multilingual</p>
+        </div>
+
         <div class="setting">
           <label class="setting-label" for="lang">Taal</label>
           <div class="select-wrap">
