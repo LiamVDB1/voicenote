@@ -43,6 +43,15 @@
             </svg>
           </button>
           <div class="user-menu" id="user-menu" role="menu" hidden>
+            <button type="button" class="user-menu-item" id="settings-btn" role="menuitem">
+              <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+                <path d="M10 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" fill="none"
+                      stroke="currentColor" stroke-width="1.6"/>
+                <path d="M3 10h2m10 0h2M10 3v2m0 10v2M5.8 5.8l1.4 1.4m5.6 5.6 1.4 1.4M14.2 5.8l-1.4 1.4m-5.6 5.6-1.4 1.4"
+                      fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              </svg>
+              Instellingen
+            </button>
             <button type="button" class="user-menu-item" id="logout-btn" role="menuitem">
               <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
                 <path d="M12 4h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3M9 14l-4-4 4-4M5 10h9"
@@ -59,6 +68,17 @@
   </header>
 
   <main class="page">
+    <section class="active-jobs" id="active-jobs" hidden aria-live="polite">
+      <div class="active-jobs-head">
+        <div>
+          <p class="eyebrow">Bezig</p>
+          <h2 class="active-jobs-title">Actieve transcripties</h2>
+        </div>
+        <span class="badge" id="active-jobs-count">0</span>
+      </div>
+      <div class="active-jobs-list" id="active-jobs-list"></div>
+    </section>
+
     <section class="upload" id="upload" aria-labelledby="upload-title">
       <h1 id="upload-title" class="visually-hidden">Audio uploaden</h1>
 
@@ -80,6 +100,10 @@
           <p class="dropzone-formats">m4a · mp3 · wav · ogg · opus · flac</p>
         </div>
       </label>
+
+      <div class="paste-row">
+        <button type="button" class="action ghost" id="paste-audio-btn">Plak vanuit klembord</button>
+      </div>
 
       <div class="settings" role="group" aria-label="Instellingen">
         <div class="setting">
@@ -132,15 +156,6 @@
       </p>
     </section>
 
-    <section class="progress" id="progress" hidden aria-live="polite">
-      <div class="bars" aria-hidden="true">
-        <span></span><span></span><span></span><span></span><span></span>
-      </div>
-      <p class="progress-text" id="progress-text">Een moment, ik luister mee…</p>
-      <p class="progress-sub" id="progress-sub"></p>
-      <button type="button" class="action ghost cancel" id="cancel-btn">Annuleren</button>
-    </section>
-
     <section class="result" id="result" hidden aria-live="polite">
       <div class="result-meta">
         <span class="badge" id="meta-engine">—</span>
@@ -170,6 +185,62 @@
         </button>
         <button type="button" class="action ghost" id="reset-btn">Nieuw bestand</button>
         <button type="button" class="action ghost" id="history-from-result">Geschiedenis</button>
+      </div>
+    </section>
+
+    <section class="settings-panel" id="settings" hidden aria-labelledby="settings-title">
+      <div class="history-head">
+        <h2 class="history-title" id="settings-title">Instellingen</h2>
+        <button type="button" class="action ghost small" id="settings-close">Sluiten</button>
+      </div>
+
+      <div class="settings-grid">
+        <form class="settings-card" id="password-form">
+          <h3>Wachtwoord wijzigen</h3>
+          <label class="auth-field">
+            <span>Huidig wachtwoord</span>
+            <input type="password" id="current-password" autocomplete="current-password" required>
+          </label>
+          <label class="auth-field">
+            <span>Nieuw wachtwoord</span>
+            <input type="password" id="new-password" autocomplete="new-password" minlength="6" required>
+          </label>
+          <label class="auth-field">
+            <span>Herhaal nieuw wachtwoord</span>
+            <input type="password" id="confirm-password" autocomplete="new-password" minlength="6" required>
+          </label>
+          <p class="inline-message" id="password-message" hidden></p>
+          <button type="submit" class="action">Wachtwoord opslaan</button>
+        </form>
+
+        <section class="settings-card" id="users-card" hidden>
+          <div class="settings-card-head">
+            <h3>Gebruikers</h3>
+            <button type="button" class="action ghost small" id="refresh-users">Ververs</button>
+          </div>
+          <div class="users-list" id="users-list"></div>
+          <form class="new-user-form" id="new-user-form">
+            <h4>Nieuwe gebruiker</h4>
+            <label class="auth-field">
+              <span>Gebruikersnaam</span>
+              <input type="text" id="new-user-username" autocomplete="off" required>
+            </label>
+            <label class="auth-field">
+              <span>Naam</span>
+              <input type="text" id="new-user-display" autocomplete="off">
+            </label>
+            <label class="auth-field">
+              <span>Wachtwoord</span>
+              <input type="password" id="new-user-password" autocomplete="new-password" minlength="6" required>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" id="new-user-admin">
+              <span>Beheerder</span>
+            </label>
+            <p class="inline-message" id="users-message" hidden></p>
+            <button type="submit" class="action">Gebruiker toevoegen</button>
+          </form>
+        </section>
       </div>
     </section>
 
