@@ -24,6 +24,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     display_name: Mapped[str] = mapped_column(String(128), default="")
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     transcripts: Mapped[list["Transcript"]] = relationship(
@@ -71,9 +72,27 @@ _engine = create_async_engine(settings.database_url, echo=False, future=True)
 _SessionLocal = async_sessionmaker(_engine, expire_on_commit=False, class_=AsyncSession)
 
 
+def normalize_username(name: str) -> str:
+    """Single source of truth — usernames are stored lowercase + trimmed."""
+    return (name or "").strip().lower()
+
+
 async def init_db() -> None:
+    from sqlalchemy import text
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Lightweight migrations for installs that pre-date these fields.
+        # SQLAlchemy's create_all() never adds new columns to existing tables.
+        result = await conn.execute(text("PRAGMA table_info(users)"))
+        cols = {row[1] for row in result.fetchall()}
+        if "is_admin" not in cols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
+            await conn.execute(text(
+                "UPDATE users SET is_admin = 1 "
+                "WHERE id = (SELECT MIN(id) FROM users)"
+            ))
+        # Lowercase any existing usernames so case-insensitive lookups all hit.
+        await conn.execute(text("UPDATE users SET username = lower(username) WHERE username != lower(username)"))
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

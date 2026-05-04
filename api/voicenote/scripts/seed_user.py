@@ -15,28 +15,38 @@ import sys
 from sqlalchemy import select
 
 from voicenote.auth import hash_password
-from voicenote.db import User, _SessionLocal, init_db
+from voicenote.db import User, _SessionLocal, init_db, normalize_username
 
 
-async def upsert_user(username: str, display_name: str, password: str) -> str:
+async def upsert_user(username: str, display_name: str, password: str, admin: bool | None) -> str:
     await init_db()
+    uname = normalize_username(username)
     async with _SessionLocal() as session:
-        result = await session.execute(select(User).where(User.username == username))
+        result = await session.execute(select(User).where(User.username == uname))
         user = result.scalar_one_or_none()
         if user is None:
+            # First user gets admin automatically unless --no-admin is passed.
+            any_user = (await session.execute(select(User).limit(1))).scalar_one_or_none()
+            if admin is None:
+                admin = any_user is None
             user = User(
-                username=username,
+                username=uname,
                 password_hash=hash_password(password),
-                display_name=display_name or username,
+                display_name=(display_name or uname).strip(),
+                is_admin=bool(admin),
             )
             session.add(user)
             await session.commit()
-            return f"created user '{username}'"
+            tag = " (admin)" if user.is_admin else ""
+            return f"created user '{uname}'{tag}"
         user.password_hash = hash_password(password)
         if display_name:
-            user.display_name = display_name
+            user.display_name = display_name.strip()
+        if admin is not None:
+            user.is_admin = bool(admin)
         await session.commit()
-        return f"updated user '{username}'"
+        tag = " (admin)" if user.is_admin else ""
+        return f"updated user '{uname}'{tag}"
 
 
 def main() -> None:
