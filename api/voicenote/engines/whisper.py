@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import contextlib
 import json
 import re
 import tempfile
@@ -21,7 +22,11 @@ class WhisperEngine:
         return shutil.which(bin_name)
 
     async def transcribe(
-        self, wav_path: Path, language: str = "auto", timeout: int = 3600
+        self,
+        wav_path: Path,
+        language: str = "auto",
+        timeout: int = 3600,
+        progress=None,
     ) -> EngineResult:
         if not settings.whisper_model_path.exists():
             raise RuntimeError(f"Whisper model not found: {settings.whisper_model_path}")
@@ -40,25 +45,61 @@ class WhisperEngine:
                 "-l", language if language and language != "auto" else "auto",
                 "-oj",  # JSON output
                 "-of", str(out_prefix),
-                "-pp",  # print progress to stderr (for logs)
+                "-pp",  # print progress to stderr — drives the progress bar
             ]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+
+            stdout_buf: list[bytes] = []
+            stderr_buf: list[bytes] = []
+            progress_re = re.compile(rb"progress\s*=\s*(\d+)")
+
+            async def _drain(stream, buf, with_progress: bool) -> None:
+                while True:
+                    line = await stream.readline()
+                    if not line:
+                        break
+                    buf.append(line)
+                    if with_progress and progress is not None:
+                        m = progress_re.search(line)
+                        if m:
+                            try:
+                                pct = int(m.group(1)) / 100.0
+                                progress(max(0.0, min(0.99, pct)))
+                            except Exception:
+                                pass
+
+            stdout_task = asyncio.create_task(_drain(proc.stdout, stdout_buf, False))
+            stderr_task = asyncio.create_task(_drain(proc.stderr, stderr_buf, True))
+
             try:
-                out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                await asyncio.wait_for(
+                    asyncio.gather(stdout_task, stderr_task), timeout=timeout
+                )
+                await proc.wait()
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.wait()
+                for t in (stdout_task, stderr_task):
+                    t.cancel()
+                    with contextlib.suppress(BaseException):
+                        await t
                 raise RuntimeError("whisper-cli timed out")
+
+            out = b"".join(stdout_buf)
+            err = b"".join(stderr_buf)
 
             if proc.returncode != 0:
                 raise RuntimeError(
                     f"whisper-cli exited {proc.returncode}: "
                     f"{err.decode('utf-8', 'replace')[:600]}"
                 )
+
+            if progress is not None:
+                progress(1.0)
 
             json_path = Path(str(out_prefix) + ".json")
             if not json_path.exists():

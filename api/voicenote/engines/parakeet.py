@@ -75,40 +75,46 @@ class ParakeetEngine:
             self._vad_config = cfg
 
     async def transcribe(
-        self, wav_path: Path, language: str = "auto", timeout: int = 3600
+        self,
+        wav_path: Path,
+        language: str = "auto",
+        timeout: int = 3600,
+        progress=None,
     ) -> EngineResult:
         # sherpa-onnx is synchronous CPU work — push to a thread, but enforce
         # the timeout so a pathological decode can't tie up workers indefinitely.
         loop = asyncio.get_event_loop()
         try:
             return await asyncio.wait_for(
-                loop.run_in_executor(None, self._transcribe_sync, wav_path),
+                loop.run_in_executor(None, self._transcribe_sync, wav_path, progress),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
             raise RuntimeError(f"parakeet inference timed out after {timeout}s")
 
-    def _transcribe_sync(self, wav_path: Path) -> EngineResult:
+    def _transcribe_sync(self, wav_path: Path, progress=None) -> EngineResult:
         self._load()
         samples, sr = _read_wav_mono_16k(wav_path)
         # Use VAD-based chunking for anything longer than ~30s.
         duration = len(samples) / float(sr) if sr else 0.0
         if self._vad_config is not None and duration > 30.0:
-            return self._transcribe_with_vad(samples, sr)
-        return self._transcribe_oneshot(samples, sr)
+            return self._transcribe_with_vad(samples, sr, progress)
+        return self._transcribe_oneshot(samples, sr, progress)
 
-    def _transcribe_oneshot(self, samples, sr) -> EngineResult:
+    def _transcribe_oneshot(self, samples, sr, progress=None) -> EngineResult:
+        if progress: progress(0.5)
         stream = self._recognizer.create_stream()
         stream.accept_waveform(sr, samples)
         self._recognizer.decode_stream(stream)
         text = (stream.result.text or "").strip()
+        if progress: progress(1.0)
         return EngineResult(
             text=text,
             segments=[Segment(start=0.0, end=len(samples) / sr, text=text)] if text else [],
             engine=self.name,
         )
 
-    def _transcribe_with_vad(self, samples, sr) -> EngineResult:
+    def _transcribe_with_vad(self, samples, sr, progress=None) -> EngineResult:
         import sherpa_onnx
         vad = sherpa_onnx.VoiceActivityDetector(
             self._vad_config, buffer_size_in_seconds=100
@@ -149,11 +155,15 @@ class ParakeetEngine:
         # Walk the entire buffer including the final partial window — the
         # previous `i + window_size < n` would silently drop end-of-audio
         # speech that landed in a tail shorter than the silero window.
+        # 90% of the progress bar tracks audio ingestion; the final 10% covers
+        # the trailing decode of any segments still in the queue.
         while i < n:
             end = min(i + window_size, n)
             vad.accept_waveform(samples[i:end])
             i = end
             drain(flush=False)
+            if progress:
+                progress(0.9 * (i / n))
 
         drain(flush=True)
         if pending_streams:
@@ -163,5 +173,7 @@ class ParakeetEngine:
                 if t:
                     segments.append(Segment(start=st, end=et, text=t))
 
+        if progress:
+            progress(1.0)
         full = " ".join(seg.text for seg in segments).strip()
         return EngineResult(text=full, segments=segments, engine=self.name)

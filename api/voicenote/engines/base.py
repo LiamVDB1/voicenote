@@ -1,7 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
+
+
+# Engines call this with a fraction in [0.0, 1.0] reflecting how much of the
+# audio has been processed. Optional — engines that can't report fine-grained
+# progress simply don't call it.
+ProgressCallback = Callable[[float], None]
 
 
 @dataclass
@@ -37,5 +43,9 @@ class TranscriptionEngine(Protocol):
     async def is_ready(self) -> bool: ...
 
     async def transcribe(
-        self, wav_path: Path, language: str = "auto", timeout: int = 3600
+        self,
+        wav_path: Path,
+        language: str = "auto",
+        timeout: int = 3600,
+        progress: ProgressCallback | None = None,
     ) -> EngineResult: ...

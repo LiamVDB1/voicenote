@@ -37,7 +37,11 @@ class VoxtralEngine:
         return shutil.which(bin_name)
 
     async def transcribe(
-        self, wav_path: Path, language: str = "auto", timeout: int = 3600
+        self,
+        wav_path: Path,
+        language: str = "auto",
+        timeout: int = 3600,
+        progress=None,  # llama-mtmd-cli has no fine-grained progress; ignored.
     ) -> EngineResult:
         if not settings.voxtral_model_path.exists():
             raise RuntimeError(f"Voxtral model not found: {settings.voxtral_model_path}")

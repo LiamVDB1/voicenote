@@ -176,11 +176,21 @@ async def _run_cascade(job: Job, wav: Path) -> tuple[EngineResult, str, bool]:
             if not await engine.is_ready():
                 job.attempts.append({"engine": name, "ok": False, "error": "not configured"})
                 continue
-            # Coarse milestone — Parakeet is fast (~30s), Whisper is slow (~minutes).
-            # Real per-chunk progress would need engine-side hooks; coarse is fine.
-            job.progress = 0.20 if name == requested else 0.30
+            # Engines call this with [0.0, 1.0]. We map the engine's reported
+            # progress into the 0.10–0.95 band of the overall job (the first
+            # 10% is upload+convert, the last 5% is DB persistence).
+            def _on_engine_progress(p: float, _job=job) -> None:
+                try:
+                    _job.progress = max(_job.progress, 0.10 + 0.85 * float(p))
+                except Exception:
+                    pass
+
+            job.progress = 0.10
             result = await engine.transcribe(
-                wav, language=job.language, timeout=settings.transcribe_timeout_sec
+                wav,
+                language=job.language,
+                timeout=settings.transcribe_timeout_sec,
+                progress=_on_engine_progress,
             )
             elapsed = time.time() - t0
             job.attempts.append({"engine": name, "ok": True, "elapsed_sec": round(elapsed, 2)})
