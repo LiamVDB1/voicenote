@@ -41,8 +41,10 @@ class Settings(BaseSettings):
     vad_min_silence_sec: float = 0.25
     vad_min_speech_sec: float = 0.2
 
-    # Whisper (whisper.cpp)
-    whisper_model: str = "ggml-large-v3-q5_0.bin"
+    # Whisper (whisper.cpp). Defaults to large-v3-turbo Q5: ~5× faster than
+    # full large-v3 on CPU, near-identical multilingual quality. Override via
+    # VN_WHISPER_MODEL if you want to swap in a different ggml file.
+    whisper_model: str = "ggml-large-v3-turbo-q5_0.bin"
     whisper_bin: str = "whisper-cli"
 
     # Voxtral (llama.cpp / mtmd-cli)

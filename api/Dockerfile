@@ -46,7 +46,10 @@ RUN curl -L --fail --retry 3 -o silero_vad.onnx \
 
 # Optional: include Whisper large-v3 too. Build with --build-arg INCLUDE_WHISPER=true
 ARG INCLUDE_WHISPER=false
-ARG WHISPER_FILE=ggml-large-v3-q5_0.bin
+# large-v3-turbo-q5_0 is the sweet spot on ARM CPU: ~5× faster than full large-v3,
+# multilingual quality only marginally lower (still beats Parakeet decisively on
+# Dutch/French). ~600 MB on disk.
+ARG WHISPER_FILE=ggml-large-v3-turbo-q5_0.bin
 RUN if [ "$INCLUDE_WHISPER" = "true" ]; then \
       curl -L --fail --retry 3 -o "$WHISPER_FILE" \
         "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$WHISPER_FILE" ; \

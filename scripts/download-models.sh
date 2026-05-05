@@ -64,9 +64,9 @@ if [[ "$WANT_PARAKEET" -eq 1 ]]; then
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
 fi
 
-# ----- Whisper large-v3 (whisper.cpp, multilingual) -----
+# ----- Whisper large-v3-turbo (whisper.cpp, multilingual, ~5× faster than v3) -----
 if [[ "$WANT_WHISPER" -eq 1 ]]; then
-  WHISPER_FILE="${WHISPER_FILE:-ggml-large-v3-q5_0.bin}"
+  WHISPER_FILE="${WHISPER_FILE:-ggml-large-v3-turbo-q5_0.bin}"
   fetch "$MODELS_DIR/$WHISPER_FILE" \
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$WHISPER_FILE"
 fi
