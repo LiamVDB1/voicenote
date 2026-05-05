@@ -101,51 +101,53 @@ async def enqueue(
 
 
 async def _run(job: Job) -> None:
+    # The CPU-bound gate is acquired per-attempt INSIDE the cascade so a Voxtral
+    # job (network-only) doesn't queue behind a slow Whisper run, and the WAV
+    # conversion / DB writes don't hold the gate either.
     try:
-        async with _job_gate:
-            job.status = "running"
-            job.started_at = time.time()
-            job.progress = 0.05
+        job.status = "running"
+        job.started_at = time.time()
+        job.progress = 0.05
 
-            wav_path = job._audio_path.with_suffix(".wav")
-            try:
-                await to_wav_16k_mono(job._audio_path, wav_path)
-            except Exception as e:
-                raise RuntimeError(f"Kon audio niet lezen: {e}") from e
-            job.duration_sec = await probe_duration_sec(job._audio_path)
-            job.progress = 0.10
+        wav_path = job._audio_path.with_suffix(".wav")
+        try:
+            await to_wav_16k_mono(job._audio_path, wav_path)
+        except Exception as e:
+            raise RuntimeError(f"Kon audio niet lezen: {e}") from e
+        job.duration_sec = await probe_duration_sec(job._audio_path)
+        job.progress = 0.10
 
-            result, used_engine, fallback = await _run_cascade(job, wav_path)
-            job.engine_used = used_engine
-            job.fallback_used = fallback
+        result, used_engine, fallback = await _run_cascade(job, wav_path)
+        job.engine_used = used_engine
+        job.fallback_used = fallback
 
-            # Persist as Transcript so it shows up in history
-            async with _SessionLocal() as session:
-                rec = Transcript(
-                    user_id=job.user_id,
-                    original_filename=job.filename,
-                    audio_size_bytes=job.audio_size_bytes,
-                    duration_sec=job.duration_sec,
-                    language=job.language,
-                    detected_language=result.detected_language,
-                    engine=used_engine,
-                    fallback_used=fallback,
-                    text=result.text,
-                    segments_json=json.dumps([
-                        {"start": s.start, "end": s.end, "text": s.text}
-                        for s in result.segments
-                    ]) if result.segments else None,
-                )
-                session.add(rec)
-                await session.commit()
-                await session.refresh(rec)
-                job.transcript_id = rec.id
+        # Persist as Transcript so it shows up in history
+        async with _SessionLocal() as session:
+            rec = Transcript(
+                user_id=job.user_id,
+                original_filename=job.filename,
+                audio_size_bytes=job.audio_size_bytes,
+                duration_sec=job.duration_sec,
+                language=job.language,
+                detected_language=result.detected_language,
+                engine=used_engine,
+                fallback_used=fallback,
+                text=result.text,
+                segments_json=json.dumps([
+                    {"start": s.start, "end": s.end, "text": s.text}
+                    for s in result.segments
+                ]) if result.segments else None,
+            )
+            session.add(rec)
+            await session.commit()
+            await session.refresh(rec)
+            job.transcript_id = rec.id
 
-            job.status = "done"
-            job.progress = 1.0
-            log.info("job %s done engine=%s fallback=%s elapsed=%.1fs",
-                     job.id, used_engine, fallback,
-                     time.time() - (job.started_at or time.time()))
+        job.status = "done"
+        job.progress = 1.0
+        log.info("job %s done engine=%s fallback=%s elapsed=%.1fs",
+                 job.id, used_engine, fallback,
+                 time.time() - (job.started_at or time.time()))
     except asyncio.CancelledError:
         log.info("job %s cancelled", job.id)
         job.status = "cancelled"
@@ -186,12 +188,26 @@ async def _run_cascade(job: Job, wav: Path) -> tuple[EngineResult, str, bool]:
                     pass
 
             job.progress = 0.10
-            result = await engine.transcribe(
-                wav,
-                language=job.language,
-                timeout=settings.transcribe_timeout_sec,
-                progress=_on_engine_progress,
-            )
+            cpu_bound = bool(getattr(engine, "cpu_bound", True))
+            if cpu_bound:
+                # Local CPU engines must serialise — running two would just
+                # halve each other's speed on a 4-core box.
+                async with _job_gate:
+                    result = await engine.transcribe(
+                        wav,
+                        language=job.language,
+                        timeout=settings.transcribe_timeout_sec,
+                        progress=_on_engine_progress,
+                    )
+            else:
+                # Network-only engines (Voxtral via Mistral API) skip the gate
+                # entirely so they can run alongside CPU work.
+                result = await engine.transcribe(
+                    wav,
+                    language=job.language,
+                    timeout=settings.transcribe_timeout_sec,
+                    progress=_on_engine_progress,
+                )
             elapsed = time.time() - t0
             job.attempts.append({"engine": name, "ok": True, "elapsed_sec": round(elapsed, 2)})
             return result, name, saw_failed_ready_engine and name != requested

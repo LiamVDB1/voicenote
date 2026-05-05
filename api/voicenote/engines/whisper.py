@@ -12,6 +12,7 @@ from .base import EngineResult, Segment
 
 class WhisperEngine:
     name = "whisper"
+    cpu_bound = True
 
     async def is_ready(self) -> bool:
         return settings.whisper_model_path.exists() and bool(self._which(settings.whisper_bin))

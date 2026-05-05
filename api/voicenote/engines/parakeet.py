@@ -36,6 +36,7 @@ class ParakeetEngine:
       decode for short clips.
     """
     name = "parakeet"
+    cpu_bound = True
 
     _recognizer: Any = None  # sherpa_onnx.OfflineRecognizer
     _vad_config: Any = None  # sherpa_onnx.VadModelConfig

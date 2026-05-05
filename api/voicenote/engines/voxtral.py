@@ -20,6 +20,9 @@ from .base import EngineResult, Segment
 
 class VoxtralEngine:
     name = "voxtral"
+    # Pure network I/O — doesn't fight the local CPU pool, so it bypasses the
+    # transcribe concurrency gate in jobs.py and can run alongside a Whisper run.
+    cpu_bound = False
 
     async def is_ready(self) -> bool:
         return bool(settings.mistral_api_key)
