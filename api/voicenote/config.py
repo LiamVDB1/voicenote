@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     mistral_api_url: str = "https://api.mistral.ai"
     voxtral_model_name: str = "voxtral-mini-latest"
     voxtral_max_minutes: int = 25  # Mistral's per-request audio cap
+    voxtral_chunk_minutes: int = 20  # safer than 25 to avoid edge-cap rejections
+    voxtral_max_parallel_chunks: int = 4  # concurrent Mistral requests per job
 
     # Inference
     inference_threads: int = 3

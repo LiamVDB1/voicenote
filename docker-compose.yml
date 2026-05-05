@@ -33,6 +33,8 @@ services:
       VN_COOKIE_SECURE: ${VN_COOKIE_SECURE:-false}
       VN_MISTRAL_API_KEY: ${VN_MISTRAL_API_KEY:-}
       VN_VOXTRAL_MODEL_NAME: ${VN_VOXTRAL_MODEL_NAME:-voxtral-mini-latest}
+      VN_VOXTRAL_CHUNK_MINUTES: ${VN_VOXTRAL_CHUNK_MINUTES:-20}
+      VN_VOXTRAL_MAX_PARALLEL_CHUNKS: ${VN_VOXTRAL_MAX_PARALLEL_CHUNKS:-4}
     deploy:
       resources:
         limits:
