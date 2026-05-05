@@ -6,7 +6,9 @@ CPU. Falls through quickly if VN_MISTRAL_API_KEY isn't set.
 """
 from __future__ import annotations
 import asyncio
+import contextlib
 import json
+import time
 from pathlib import Path
 
 import httpx
@@ -61,13 +63,37 @@ class VoxtralEngine:
         files = {"file": (wav_path.name, body_bytes, "audio/wav")}
 
         if progress:
-            progress(0.15)
+            progress(0.10)
 
+        # Mistral's API doesn't stream a real progress signal back. We fake it
+        # with a time-based estimate so the bar feels alive during the request.
+        # Conservative assumption: Mistral processes audio at ~10× realtime on
+        # their cloud GPU, plus ~3s of overhead. The ticker maps elapsed time
+        # onto 10%–90% of the engine's progress band; the final jump to 100%
+        # happens after the response actually lands.
+        async def _tick_progress() -> None:
+            if progress is None:
+                return
+            t0 = time.monotonic()
+            est_total = max(3.0, (duration or 60.0) / 10.0 + 3.0)
+            while True:
+                await asyncio.sleep(0.5)
+                frac = min(0.95, (time.monotonic() - t0) / est_total)
+                progress(0.10 + 0.80 * frac)
+
+        ticker = asyncio.create_task(_tick_progress())
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(float(timeout), connect=30.0)) as client:
                 resp = await client.post(url, headers=headers, files=files, data=data)
         except httpx.HTTPError as e:
+            ticker.cancel()
+            with contextlib.suppress(BaseException):
+                await ticker
             raise RuntimeError(f"Voxtral API onbereikbaar: {e}") from e
+        finally:
+            ticker.cancel()
+            with contextlib.suppress(BaseException):
+                await ticker
 
         if progress:
             progress(0.95)
