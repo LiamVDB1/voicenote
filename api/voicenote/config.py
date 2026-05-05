@@ -47,10 +47,11 @@ class Settings(BaseSettings):
     whisper_model: str = "ggml-large-v3-turbo-q5_0.bin"
     whisper_bin: str = "whisper-cli"
 
-    # Voxtral (llama.cpp / mtmd-cli)
-    voxtral_model: str = "Voxtral-Mini-3B-2507-Q4_K_M.gguf"
-    voxtral_mmproj: str = "mmproj-Voxtral-Mini-3B-2507-f16.gguf"
-    llama_mtmd_bin: str = "llama-mtmd-cli"
+    # Voxtral (Mistral hosted API — $1/1000 min for voxtral-mini-transcribe)
+    mistral_api_key: str = ""
+    mistral_api_url: str = "https://api.mistral.ai"
+    voxtral_model_name: str = "voxtral-mini-latest"
+    voxtral_max_minutes: int = 25  # Mistral's per-request audio cap
 
     # Inference
     inference_threads: int = 3
@@ -99,14 +100,6 @@ class Settings(BaseSettings):
     @property
     def whisper_model_path(self) -> Path:
         return self.models_dir / self.whisper_model
-
-    @property
-    def voxtral_model_path(self) -> Path:
-        return self.models_dir / self.voxtral_model
-
-    @property
-    def voxtral_mmproj_path(self) -> Path:
-        return self.models_dir / self.voxtral_mmproj
 
     @property
     def fallback_engines(self) -> list[str]:

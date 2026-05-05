@@ -827,6 +827,39 @@ body {
   transform: translateY(-1px);
   box-shadow: var(--shadow);
 }
+
+.history-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.history-row .history-item { flex: 1; min-width: 0; }
+
+.history-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  flex-shrink: 0;
+  background: var(--paper-soft);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  color: var(--ink-mute);
+  cursor: pointer;
+  transition: all 200ms var(--ease);
+}
+.history-delete:hover {
+  background: rgba(200, 85, 61, 0.08);
+  border-color: var(--accent-soft);
+  color: var(--accent-deep);
+}
+
+/* Tighter layout when there are 3 engine segments */
+.segmented-3 .seg { padding: 12px 10px; font-size: 14px; }
+@media (max-width: 480px) {
+  .segmented-3 .seg { padding: 10px 8px; font-size: 13px; }
+  .segmented-3 .seg-dot { display: none; }
+}
 .history-item-main { flex: 1; min-width: 0; }
 .history-item-title {
   font-family: 'Fraunces', serif;

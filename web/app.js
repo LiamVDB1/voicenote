@@ -84,7 +84,7 @@
   function engineHelpText(e) {
     if (e === 'parakeet') return 'Parakeet · razendsnel, goed multilingual';
     if (e === 'whisper')  return 'Whisper · trager, sterk in Nederlands';
-    if (e === 'voxtral')  return 'Voxtral · audio-LLM, experimenteel';
+    if (e === 'voxtral')  return 'Voxtral · beste Nederlandse kwaliteit (via Mistral API)';
     return '';
   }
 
@@ -424,7 +424,7 @@
   }
 
   function engineLabel(e) {
-    return ({ parakeet: 'Snel', whisper: 'Zorgvuldig', voxtral: 'Voxtral' })[e] || e || 'Snel';
+    return ({ parakeet: 'Snel', whisper: 'Zorgvuldig', voxtral: 'Beste' })[e] || e || 'Snel';
   }
   function langLabel(c) {
     return ({ nl: 'Nederlands', en: 'English', fr: 'Français', de: 'Deutsch', es: 'Español', it: 'Italiano', pt: 'Português', auto: 'Automatisch' })[c] || c;
@@ -745,27 +745,60 @@
       return;
     }
     items.forEach((it) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'history-item';
+      const row = document.createElement('div');
+      row.className = 'history-row';
       const meta = [fmtDate(it.created_at), langLabel(it.language || 'auto'), engineLabel(it.engine)];
       if (it.duration_sec) meta.push(formatTime(Math.round(it.duration_sec)));
       const snippetHtml = it.snippet
         ? `<p class="history-item-snippet">${escapeHtml(it.snippet)}${(it.snippet || '').length >= 160 ? '…' : ''}</p>`
         : '';
-      btn.innerHTML = `
-        <div class="history-item-main">
-          <p class="history-item-title">${escapeHtml(it.original_filename || 'Naamloos')}</p>
-          <p class="history-item-meta">${meta.join(' · ')}</p>
-          ${snippetHtml}
-        </div>
-        <svg class="history-item-arrow" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-          <path d="M7 5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8"
-                stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>`;
-      btn.addEventListener('click', () => loadTranscript(it.id));
-      els.historyList.appendChild(btn);
+      row.innerHTML = `
+        <button type="button" class="history-item">
+          <div class="history-item-main">
+            <p class="history-item-title">${escapeHtml(it.original_filename || 'Naamloos')}</p>
+            <p class="history-item-meta">${meta.join(' · ')}</p>
+            ${snippetHtml}
+          </div>
+          <svg class="history-item-arrow" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+            <path d="M7 5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button type="button" class="history-delete" aria-label="Verwijder dit transcript" title="Verwijder">
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+            <path d="M5 6h10M8 6V4h4v2M6 6l1 10h6l1-10M9 9v5M11 9v5"
+                  fill="none" stroke="currentColor" stroke-width="1.6"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>`;
+      row.querySelector('.history-item').addEventListener('click', () => loadTranscript(it.id));
+      row.querySelector('.history-delete').addEventListener('click', () => deleteTranscript(it.id, row));
+      els.historyList.appendChild(row);
     });
+  }
+
+  async function deleteTranscript(id, rowEl) {
+    if (!confirm('Dit transcript permanent verwijderen?')) return;
+    try {
+      const r = await fetch(API.transcript(id), { method: 'DELETE', credentials: 'same-origin' });
+      if (r.status === 401) { window.location.replace('/login.html'); return; }
+      if (!r.ok) throw new Error('Kon niet verwijderen');
+      rowEl.style.transition = 'opacity 200ms ease, transform 200ms ease';
+      rowEl.style.opacity = '0';
+      rowEl.style.transform = 'translateX(8px)';
+      setTimeout(() => {
+        rowEl.remove();
+        if (!els.historyList.querySelector('.history-row')) {
+          els.historyList.innerHTML = '';
+          const p = document.createElement('p');
+          p.className = 'history-empty';
+          p.textContent = 'Nog niets om te tonen.';
+          els.historyList.appendChild(p);
+        }
+      }, 220);
+    } catch (e) {
+      alert(e.message || 'Verwijderen mislukt.');
+    }
   }
 
   async function loadTranscript(id) {

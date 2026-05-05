@@ -1,119 +1,111 @@
+"""
+Voxtral Mini via Mistral's hosted API. Roughly $1 per 1,000 minutes of audio
+(voxtral-mini-transcribe pricing). Best Dutch ASR quality of the three engines
+in this project — and zero local compute, so it doesn't fight the ARM box for
+CPU. Falls through quickly if VN_MISTRAL_API_KEY isn't set.
+"""
 from __future__ import annotations
 import asyncio
-import re
+import json
 from pathlib import Path
 
+import httpx
+
+from ..audio import probe_duration_sec
 from ..config import settings
-from .base import EngineResult
-
-
-_LANG_PROMPTS = {
-    "nl": "Transcribeer deze audio woord voor woord in het Nederlands. Geef alleen de tekst terug.",
-    "en": "Transcribe this audio verbatim in English. Output only the transcript.",
-    "fr": "Transcrivez cet audio mot pour mot en français. Renvoyez uniquement le transcript.",
-    "de": "Transkribiere diesen Audio wortgetreu auf Deutsch. Gib nur das Transkript zurück.",
-    "auto": "Transcribe this audio verbatim in its source language. Output only the transcript text, no commentary.",
-}
+from .base import EngineResult, Segment
 
 
 class VoxtralEngine:
-    """
-    Mistral Voxtral Mini 3B via llama.cpp's mtmd-cli.
-    Optional second-line fallback. llama.cpp's audio support is upstream-flagged
-    experimental — keep the model files out of the default download to save space.
-    """
     name = "voxtral"
 
     async def is_ready(self) -> bool:
-        return (
-            settings.voxtral_model_path.exists()
-            and settings.voxtral_mmproj_path.exists()
-            and bool(self._which(settings.llama_mtmd_bin))
-        )
-
-    @staticmethod
-    def _which(bin_name: str) -> str | None:
-        import shutil
-        return shutil.which(bin_name)
+        return bool(settings.mistral_api_key)
 
     async def transcribe(
         self,
         wav_path: Path,
         language: str = "auto",
         timeout: int = 3600,
-        progress=None,  # llama-mtmd-cli has no fine-grained progress; ignored.
+        progress=None,
     ) -> EngineResult:
-        if not settings.voxtral_model_path.exists():
-            raise RuntimeError(f"Voxtral model not found: {settings.voxtral_model_path}")
-        if not settings.voxtral_mmproj_path.exists():
-            raise RuntimeError(f"Voxtral mmproj not found: {settings.voxtral_mmproj_path}")
-        bin_path = self._which(settings.llama_mtmd_bin)
-        if not bin_path:
-            raise RuntimeError(f"{settings.llama_mtmd_bin} not in PATH")
+        if not settings.mistral_api_key:
+            raise RuntimeError("Mistral API-sleutel niet geconfigureerd (VN_MISTRAL_API_KEY)")
 
-        prompt = _LANG_PROMPTS.get(language, _LANG_PROMPTS["auto"])
-
-        cmd = [
-            bin_path,
-            "-m", str(settings.voxtral_model_path),
-            "--mmproj", str(settings.voxtral_mmproj_path),
-            "--audio", str(wav_path),
-            "-p", prompt,
-            "-t", str(settings.inference_threads),
-            "-c", "16384",
-            "--temp", "0.0",
-            "-no-cnv",
-        ]
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise RuntimeError("voxtral inference timed out")
-
-        if proc.returncode != 0:
+        # Mistral has a per-request audio length cap — fail clearly upstream
+        # rather than getting a vague 4xx from the API.
+        duration = await probe_duration_sec(wav_path)
+        if duration is not None and duration > settings.voxtral_max_minutes * 60:
             raise RuntimeError(
-                f"llama-mtmd-cli exited {proc.returncode}: "
-                f"{err.decode('utf-8', 'replace')[-800:]}"
+                f"Audio is langer dan {settings.voxtral_max_minutes} minuten — "
+                "Voxtral-API ondersteunt geen langere bestanden in één request."
             )
 
-        raw = out.decode("utf-8", "replace")
-        text = self._extract_assistant_text(raw)
-        return EngineResult(
-            text=text,
-            segments=[],
-            detected_language=language if language != "auto" else None,
-            engine=self.name,
-            raw_stdout=raw,
-            raw_stderr=err.decode("utf-8", "replace"),
+        url = f"{settings.mistral_api_url.rstrip('/')}/v1/audio/transcriptions"
+        headers = {"Authorization": f"Bearer {settings.mistral_api_key}"}
+        data: dict[str, str] = {"model": settings.voxtral_model_name}
+        if language and language != "auto":
+            data["language"] = language
+
+        if progress:
+            progress(0.05)
+
+        # httpx handles streamed multipart upload; we open the file in a thread
+        # to avoid blocking the event loop on large files.
+        loop = asyncio.get_event_loop()
+
+        def _read_bytes() -> bytes:
+            return wav_path.read_bytes()
+
+        body_bytes = await loop.run_in_executor(None, _read_bytes)
+        files = {"file": (wav_path.name, body_bytes, "audio/wav")}
+
+        if progress:
+            progress(0.15)
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(float(timeout), connect=30.0)) as client:
+                resp = await client.post(url, headers=headers, files=files, data=data)
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"Voxtral API onbereikbaar: {e}") from e
+
+        if progress:
+            progress(0.95)
+
+        if resp.status_code >= 400:
+            # Surface a useful error string to the UI without leaking the auth header.
+            err_body = resp.text[:400] if resp.text else f"HTTP {resp.status_code}"
+            raise RuntimeError(f"Voxtral API gaf {resp.status_code}: {err_body}")
+
+        try:
+            payload = resp.json()
+        except Exception as e:
+            raise RuntimeError(f"Voxtral API gaf onleesbare response: {e}") from e
+
+        text = (payload.get("text") or "").strip()
+        detected_language = (
+            payload.get("language")
+            or (language if language and language != "auto" else None)
         )
 
-    @staticmethod
-    def _extract_assistant_text(stdout: str) -> str:
-        lines = stdout.splitlines()
-        kept: list[str] = []
-        skip_prefixes = (
-            "main:", "load_", "llama_", "ggml_", "system_info", "sampler",
-            "build:", "encoding image slice", "image slice encoded",
-            "log start", "log end", "model:", "n_threads", "n_predict",
+        segments: list[Segment] = []
+        for seg in payload.get("segments") or []:
+            t = (seg.get("text") or "").strip()
+            if not t:
+                continue
+            segments.append(Segment(
+                start=float(seg.get("start", 0.0)),
+                end=float(seg.get("end", 0.0)),
+                text=t,
+            ))
+
+        if progress:
+            progress(1.0)
+
+        return EngineResult(
+            text=text,
+            segments=segments,
+            detected_language=detected_language,
+            engine=self.name,
+            raw_stdout=json.dumps(payload)[:2000],
         )
-        for ln in lines:
-            s = ln.rstrip()
-            if not s:
-                continue
-            low = s.strip().lower()
-            if any(low.startswith(p) for p in skip_prefixes):
-                continue
-            if s.startswith(">") or s.startswith("<"):
-                continue
-            kept.append(s)
-        text = "\n".join(kept).strip()
-        text = re.sub(r"\n[^\n]*tokens?/s.*$", "", text, flags=re.S).strip()
-        text = re.sub(r"^Transcribe[^\n]*\n", "", text, flags=re.I)
-        return text.strip()

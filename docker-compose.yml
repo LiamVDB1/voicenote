@@ -31,6 +31,8 @@ services:
       VN_MAX_UPLOAD_MB: ${VN_MAX_UPLOAD_MB:-200}
       VN_MAX_AUDIO_MINUTES: ${VN_MAX_AUDIO_MINUTES:-180}
       VN_COOKIE_SECURE: ${VN_COOKIE_SECURE:-false}
+      VN_MISTRAL_API_KEY: ${VN_MISTRAL_API_KEY:-}
+      VN_VOXTRAL_MODEL_NAME: ${VN_VOXTRAL_MODEL_NAME:-voxtral-mini-latest}
     deploy:
       resources:
         limits:

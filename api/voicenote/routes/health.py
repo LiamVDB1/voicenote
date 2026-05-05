@@ -10,7 +10,7 @@ router = APIRouter()
 _ENGINE_MODEL_LABEL = {
     "parakeet": lambda: settings.parakeet_dir,
     "whisper":  lambda: settings.whisper_model,
-    "voxtral":  lambda: settings.voxtral_model,
+    "voxtral":  lambda: f"{settings.voxtral_model_name} (Mistral API)",
 }
 
 
