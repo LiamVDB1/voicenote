@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     voxtral_model_name: str = "voxtral-mini-latest"
     voxtral_max_minutes: int = 25  # Mistral's per-request audio cap
     voxtral_chunk_minutes: int = 20  # safer than 25 to avoid edge-cap rejections
+    voxtral_chunk_overlap_sec: float = 2.0  # second-chunk starts this many seconds earlier
     voxtral_max_parallel_chunks: int = 4  # concurrent Mistral requests per job
 
     # Inference

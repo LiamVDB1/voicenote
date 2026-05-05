@@ -64,41 +64,100 @@ class VoxtralEngine:
         )
 
     # ------------------------------------------------------------------ split
-    async def _split_audio(self, wav_path: Path, chunk_sec: int) -> list[_Chunk]:
-        """Split wav into ≤chunk_sec chunks via ffmpeg's segment muxer.
-        Stream-copy (no re-encode) so it's fast and lossless."""
+    async def _split_audio(
+        self, wav_path: Path, chunk_sec: int, overlap_sec: float, total_duration: float,
+    ) -> list[_Chunk]:
+        """Cut the wav into chunks with a small overlap at the start of every
+        chunk after the first. The boundary at exactly i*chunk_sec stays the
+        natural split point; chunk i+1 just starts `overlap_sec` earlier so a
+        word that gets sliced in two is still fully present in one of the two
+        chunks. We dedupe the duplicate at stitch time.
+
+        Each chunk is cut with its own ffmpeg invocation (stream-copy → fast,
+        lossless). The segment muxer can't do per-chunk overlap.
+        """
         out_dir = wav_path.parent / "chunks"
         if out_dir.exists():
             shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True)
 
-        pattern = str(out_dir / "chunk_%03d.wav")
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-i", str(wav_path),
-            "-f", "segment",
-            "-segment_time", str(chunk_sec),
-            "-reset_timestamps", "1",
-            "-c", "copy",
-            pattern,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, err = await proc.communicate()
-        if proc.returncode != 0:
-            shutil.rmtree(out_dir, ignore_errors=True)
-            raise RuntimeError(f"ffmpeg split failed: {err.decode('utf-8', 'replace')[:300]}")
-
-        chunk_files = sorted(out_dir.glob("chunk_*.wav"))
-        if not chunk_files:
-            shutil.rmtree(out_dir, ignore_errors=True)
-            raise RuntimeError("ffmpeg split produced no chunks")
-
         chunks: list[_Chunk] = []
-        for i, p in enumerate(chunk_files):
-            d = await probe_duration_sec(p) or float(chunk_sec)
-            chunks.append(_Chunk(path=p, start_sec=i * float(chunk_sec), duration_sec=d))
+        i = 0
+        while True:
+            cut = i * chunk_sec
+            start = max(0.0, float(cut) - (overlap_sec if i > 0 else 0.0))
+            end = min(total_duration, float((i + 1) * chunk_sec))
+            if start >= total_duration:
+                break
+
+            out_path = out_dir / f"chunk_{i:03d}.wav"
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-ss", f"{start:.3f}",
+                "-t", f"{(end - start):.3f}",
+                "-i", str(wav_path),
+                "-c", "copy",
+                str(out_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, err = await proc.communicate()
+            if proc.returncode != 0:
+                shutil.rmtree(out_dir, ignore_errors=True)
+                raise RuntimeError(
+                    f"ffmpeg chunk {i} failed: {err.decode('utf-8', 'replace')[:300]}"
+                )
+
+            chunks.append(_Chunk(path=out_path, start_sec=start, duration_sec=end - start))
+            if end >= total_duration:
+                break
+            i += 1
+
+        if not chunks:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            raise RuntimeError("split produced no chunks")
         return chunks
+
+    # ------------------------------------------------------------ stitcher
+    @staticmethod
+    def _merge_with_overlap(prev_text: str, next_text: str, max_overlap_words: int = 30) -> str:
+        """Concatenate two adjacent chunk transcripts, stripping the leading
+        words of `next_text` that already appeared at the tail of `prev_text`.
+
+        Compares word-by-word, lowercased + punctuation-stripped, walking
+        suffix lengths from largest to smallest until we find a match. If
+        nothing matches we just join with a paragraph break.
+        """
+        if not prev_text:
+            return next_text
+        if not next_text:
+            return prev_text
+
+        prev_words = prev_text.split()
+        next_words = next_text.split()
+        if not prev_words or not next_words:
+            return (prev_text + "\n\n" + next_text).strip()
+
+        def norm(w: str) -> str:
+            return w.lower().strip(".,!?;:\"'()…—–-")
+
+        max_n = min(max_overlap_words, len(prev_words), len(next_words))
+        best_n = 0
+        for n in range(max_n, 1, -1):
+            tail = [norm(w) for w in prev_words[-n:]]
+            head = [norm(w) for w in next_words[:n]]
+            if tail == head and any(t for t in tail):  # avoid matching empty/punctuation-only
+                best_n = n
+                break
+
+        if best_n == 0:
+            return (prev_text + "\n\n" + next_text).strip()
+        merged_tail = " ".join(next_words[best_n:]).strip()
+        if not merged_tail:
+            return prev_text
+        # Decide separator: same paragraph if the dedup was substantial, else newline
+        sep = " " if best_n >= 3 else "\n"
+        return prev_text + sep + merged_tail
 
     # -------------------------------------------------------------- chunked
     async def _transcribe_chunked(
@@ -110,7 +169,8 @@ class VoxtralEngine:
         total_duration: float,
     ) -> EngineResult:
         chunk_sec = settings.voxtral_chunk_minutes * 60
-        chunks = await self._split_audio(wav_path, chunk_sec)
+        overlap_sec = settings.voxtral_chunk_overlap_sec
+        chunks = await self._split_audio(wav_path, chunk_sec, overlap_sec, total_duration)
         n = len(chunks)
 
         # Per-chunk progress; the overall progress is the average across chunks.
@@ -145,16 +205,28 @@ class VoxtralEngine:
             chunks_dir = wav_path.parent / "chunks"
             shutil.rmtree(chunks_dir, ignore_errors=True)
 
-        # Stitch text + segments back together with absolute timestamps.
-        text_parts: list[str] = []
+        # Stitch text with word-level dedup at the overlap seam, and rebuild
+        # segments in absolute time, dropping the overlap region of every
+        # chunk after the first (those seconds already exist in the previous
+        # chunk's segments).
+        full_text = ""
         all_segments: list[Segment] = []
         detected_language: str | None = None
-        for chunk, res in zip(chunks, results):
-            if res.text.strip():
-                text_parts.append(res.text.strip())
+        for idx, (chunk, res) in enumerate(zip(chunks, results)):
             if not detected_language and res.detected_language:
                 detected_language = res.detected_language
+
+            if idx == 0:
+                full_text = res.text.strip()
+            else:
+                full_text = self._merge_with_overlap(full_text, res.text.strip())
+
+            # For chunk i>=1, the first overlap_sec of internal time was already
+            # transcribed in chunk i-1's tail — skip those segments.
+            internal_skip = overlap_sec if idx > 0 else 0.0
             for s in res.segments:
+                if s.start < internal_skip:
+                    continue
                 all_segments.append(Segment(
                     start=s.start + chunk.start_sec,
                     end=s.end + chunk.start_sec,
@@ -164,9 +236,8 @@ class VoxtralEngine:
         if progress is not None:
             progress(1.0)
 
-        full_text = "\n\n".join(text_parts).strip()
         return EngineResult(
-            text=full_text,
+            text=full_text.strip(),
             segments=all_segments,
             detected_language=detected_language or (language if language != "auto" else None),
             engine=self.name,

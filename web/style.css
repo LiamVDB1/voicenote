@@ -644,6 +644,23 @@ body {
   margin-top: 8px;
   border-radius: 2px;
 }
+.result-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.result-head .result-actions {
+  margin-top: 6px;          /* line up with title baseline-ish */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+@media (max-width: 600px) {
+  .result-head { flex-direction: column; }
+  .result-head .result-actions { justify-content: flex-start; width: 100%; }
+}
 .transcript {
   background: rgba(255, 252, 246, 0.85);
   border: 1px solid var(--rule);
