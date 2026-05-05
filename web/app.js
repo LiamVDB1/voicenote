@@ -42,7 +42,7 @@
 
   const state = {
     file: null,
-    engine: 'parakeet',
+    engine: 'whisper',
     user: null,
     transcriptText: '',
     transcriptName: 'transcript',
