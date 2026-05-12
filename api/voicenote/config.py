@@ -52,9 +52,27 @@ class Settings(BaseSettings):
     mistral_api_url: str = "https://api.mistral.ai"
     voxtral_model_name: str = "voxtral-mini-latest"
     voxtral_max_minutes: int = 25  # Mistral's per-request audio cap
-    voxtral_chunk_minutes: int = 20  # safer than 25 to avoid edge-cap rejections
+    # 10-min default keeps the blast radius of a single bad chunk small.
+    voxtral_chunk_minutes: int = 10
     voxtral_chunk_overlap_sec: float = 2.0  # second-chunk starts this many seconds earlier
     voxtral_max_parallel_chunks: int = 4  # concurrent Mistral requests per job
+
+    # Anti-hallucination: retry chunks whose output looks like a runaway
+    # repetition loop. After this many voxtral retries fail, fall back to
+    # whisper for that chunk only.
+    voxtral_max_chunk_retries: int = 3
+    # Minimum consecutive repeats of the same n-gram to flag a loop.
+    voxtral_loop_min_repeats: int = 8
+    # N-gram sizes (in words) we check.
+    voxtral_loop_min_ngram: int = 3
+    voxtral_loop_max_ngram: int = 12
+
+    # Snap chunk boundaries to silences (so a chunk never starts mid-utterance,
+    # which is the most common Voxtral loop trigger). Uses ffmpeg silencedetect.
+    voxtral_vad_align_chunks: bool = True
+    voxtral_silence_search_window_sec: float = 60.0
+    voxtral_silence_threshold_db: float = -30.0
+    voxtral_silence_min_duration_sec: float = 0.5
 
     # Inference
     inference_threads: int = 3

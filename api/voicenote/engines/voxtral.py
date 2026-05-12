@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import shutil
 import time
 from dataclasses import dataclass
@@ -20,9 +21,11 @@ from pathlib import Path
 
 import httpx
 
-from ..audio import probe_duration_sec
+from ..audio import detect_silences, probe_duration_sec
 from ..config import settings
 from .base import EngineResult, Segment
+
+log = logging.getLogger("voicenote.engines.voxtral")
 
 
 @dataclass
@@ -63,15 +66,58 @@ class VoxtralEngine:
             progress=progress, total_duration=duration,
         )
 
+    # -------------------------------------------------------------- boundaries
+    @staticmethod
+    def _pick_boundaries(
+        target_chunk_sec: float,
+        total_duration: float,
+        silences: list[tuple[float, float]],
+        search_window_sec: float,
+    ) -> list[float]:
+        """Pick chunk cut points. Starts with ideal targets at i*target_chunk_sec
+        and snaps each to the centre of the longest silence within
+        +/- search_window_sec. If no silence is within the window, the ideal
+        target stands (the merge dedup handles a mid-utterance cut).
+
+        Returns a strictly increasing list of cut times in (0, total_duration);
+        the chunks are [0, cuts[0], cuts[1], ..., total_duration].
+        """
+        cuts: list[float] = []
+        target = target_chunk_sec
+        last_cut = 0.0
+        while target < total_duration:
+            best_mid: float | None = None
+            best_dur = 0.0
+            for s, e in silences:
+                if e <= last_cut:
+                    continue
+                mid = (s + e) / 2.0
+                if abs(mid - target) > search_window_sec:
+                    continue
+                dur = e - s
+                if dur > best_dur:
+                    best_dur = dur
+                    best_mid = mid
+            cut = best_mid if best_mid is not None else target
+            # Guard against silences/targets we've already passed.
+            if cut <= last_cut + 1.0:
+                cut = max(last_cut + 1.0, target)
+            cuts.append(cut)
+            last_cut = cut
+            target = cut + target_chunk_sec
+        return cuts
+
     # ------------------------------------------------------------------ split
     async def _split_audio(
-        self, wav_path: Path, chunk_sec: int, overlap_sec: float, total_duration: float,
+        self,
+        wav_path: Path,
+        boundaries: list[float],
+        overlap_sec: float,
+        total_duration: float,
     ) -> list[_Chunk]:
-        """Cut the wav into chunks with a small overlap at the start of every
-        chunk after the first. The boundary at exactly i*chunk_sec stays the
-        natural split point; chunk i+1 just starts `overlap_sec` earlier so a
-        word that gets sliced in two is still fully present in one of the two
-        chunks. We dedupe the duplicate at stitch time.
+        """Cut the wav at the given boundary times. Each chunk after the first
+        starts `overlap_sec` earlier so a word sliced at the boundary is fully
+        present in one of the two chunks; the merge step dedupes the seam.
 
         Each chunk is cut with its own ffmpeg invocation (stream-copy → fast,
         lossless). The segment muxer can't do per-chunk overlap.
@@ -81,14 +127,18 @@ class VoxtralEngine:
             shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True)
 
+        # boundaries are the *internal* cut points; build [(start,end), ...]:
+        # first chunk runs 0..boundaries[0], next chunks each run
+        # boundaries[i-1]..boundaries[i], last runs boundaries[-1]..total.
+        edges = [0.0, *boundaries, total_duration]
+        ranges = list(zip(edges, edges[1:]))
+
         chunks: list[_Chunk] = []
-        i = 0
-        while True:
-            cut = i * chunk_sec
-            start = max(0.0, float(cut) - (overlap_sec if i > 0 else 0.0))
-            end = min(total_duration, float((i + 1) * chunk_sec))
-            if start >= total_duration:
-                break
+        for i, (cut, next_cut) in enumerate(ranges):
+            start = max(0.0, cut - (overlap_sec if i > 0 else 0.0))
+            end = min(total_duration, next_cut)
+            if end - start < 0.5:
+                continue
 
             out_path = out_dir / f"chunk_{i:03d}.wav"
             proc = await asyncio.create_subprocess_exec(
@@ -109,14 +159,63 @@ class VoxtralEngine:
                 )
 
             chunks.append(_Chunk(path=out_path, start_sec=start, duration_sec=end - start))
-            if end >= total_duration:
-                break
-            i += 1
 
         if not chunks:
             shutil.rmtree(out_dir, ignore_errors=True)
             raise RuntimeError("split produced no chunks")
         return chunks
+
+    # -------------------------------------------------------------- loop check
+    @staticmethod
+    def _detect_repetition_loop(
+        text: str,
+        min_ngram: int = 3,
+        max_ngram: int = 12,
+        min_repeats: int = 8,
+    ) -> tuple[bool, str | None]:
+        """Detect runaway ASR repetition: any word n-gram of length [min_ngram,
+        max_ngram] that appears `min_repeats` or more times back-to-back.
+
+        Word-level with light normalization (lowercase, strip trailing
+        punctuation) — token-exact loops are the dominant Voxtral/Whisper
+        failure mode, so character-level fuzz isn't needed.
+
+        Returns (is_loop, sample_phrase). sample_phrase is one instance of the
+        offending n-gram, useful for logging.
+        """
+        words = text.split()
+        if len(words) < min_ngram * min_repeats:
+            return False, None
+
+        _PUNCT = ".,!?;:\"'()…—–-"
+
+        def norm(w: str) -> str:
+            return w.lower().strip(_PUNCT)
+
+        nwords = [norm(w) for w in words]
+
+        for n in range(min_ngram, max_ngram + 1):
+            if len(nwords) < n * min_repeats:
+                break
+            i = 0
+            while i + 2 * n <= len(nwords):
+                ngram = nwords[i:i + n]
+                if not any(ngram):  # all-punctuation/empty — skip
+                    i += 1
+                    continue
+                if nwords[i + n:i + 2 * n] != ngram:
+                    i += 1
+                    continue
+                # Found a doubled n-gram at i; count how many times it repeats.
+                repeats = 2
+                j = i + 2 * n
+                while j + n <= len(nwords) and nwords[j:j + n] == ngram:
+                    repeats += 1
+                    j += n
+                if repeats >= min_repeats:
+                    return True, " ".join(words[i:i + n])
+                i = j  # skip past this run
+        return False, None
 
     # ------------------------------------------------------------ stitcher
     @staticmethod
@@ -170,7 +269,35 @@ class VoxtralEngine:
     ) -> EngineResult:
         chunk_sec = settings.voxtral_chunk_minutes * 60
         overlap_sec = settings.voxtral_chunk_overlap_sec
-        chunks = await self._split_audio(wav_path, chunk_sec, overlap_sec, total_duration)
+
+        # Snap boundaries to silences when enabled; this dramatically reduces
+        # the chance a chunk starts mid-utterance (the dominant Voxtral loop
+        # trigger). If silence detection finds nothing useful in a window,
+        # _pick_boundaries falls back to the fixed-time target.
+        if settings.voxtral_vad_align_chunks:
+            silences = await detect_silences(
+                wav_path,
+                noise_db=settings.voxtral_silence_threshold_db,
+                min_duration_sec=settings.voxtral_silence_min_duration_sec,
+            )
+            boundaries = self._pick_boundaries(
+                target_chunk_sec=float(chunk_sec),
+                total_duration=total_duration,
+                silences=silences,
+                search_window_sec=settings.voxtral_silence_search_window_sec,
+            )
+            log.info(
+                "voxtral: %d silences, %d boundaries (target=%ds)",
+                len(silences), len(boundaries), chunk_sec,
+            )
+        else:
+            boundaries = [
+                float(i * chunk_sec)
+                for i in range(1, int(total_duration // chunk_sec) + 1)
+                if i * chunk_sec < total_duration
+            ]
+
+        chunks = await self._split_audio(wav_path, boundaries, overlap_sec, total_duration)
         n = len(chunks)
 
         # Per-chunk progress; the overall progress is the average across chunks.
@@ -189,12 +316,12 @@ class VoxtralEngine:
 
         async def run_chunk(idx: int, chunk: _Chunk) -> EngineResult:
             async with sem:
-                return await self._transcribe_one(
-                    chunk.path,
+                return await self._transcribe_chunk_with_retry(
+                    idx=idx,
+                    chunk=chunk,
                     language=language,
                     timeout=timeout,
-                    progress=make_cb(idx),
-                    duration_hint=chunk.duration_sec,
+                    progress_cb=make_cb(idx),
                 )
 
         try:
@@ -241,6 +368,69 @@ class VoxtralEngine:
             segments=all_segments,
             detected_language=detected_language or (language if language != "auto" else None),
             engine=self.name,
+        )
+
+    # ----------------------------------------------------------- retry+fallback
+    async def _transcribe_chunk_with_retry(
+        self,
+        idx: int,
+        chunk: _Chunk,
+        language: str,
+        timeout: int,
+        progress_cb,
+    ) -> EngineResult:
+        """Transcribe one chunk with Voxtral, retrying on detected runaway
+        repetition loops. After `voxtral_max_chunk_retries` Voxtral attempts
+        all fail (whether by exception or by loop output), fall back to
+        Whisper for this chunk only — the cheap, slower, but loop-free path.
+        """
+        retries = max(1, settings.voxtral_max_chunk_retries)
+        last_err: str | None = None
+
+        for attempt in range(1, retries + 1):
+            try:
+                result = await self._transcribe_one(
+                    chunk.path,
+                    language=language,
+                    timeout=timeout,
+                    progress=progress_cb,
+                    duration_hint=chunk.duration_sec,
+                )
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e}"
+                log.warning(
+                    "voxtral: chunk %d attempt %d/%d raised: %s",
+                    idx, attempt, retries, last_err,
+                )
+                continue
+
+            is_loop, phrase = self._detect_repetition_loop(
+                result.text,
+                min_ngram=settings.voxtral_loop_min_ngram,
+                max_ngram=settings.voxtral_loop_max_ngram,
+                min_repeats=settings.voxtral_loop_min_repeats,
+            )
+            if not is_loop:
+                return result
+            last_err = f"repetition loop: {phrase!r}"
+            log.warning(
+                "voxtral: chunk %d attempt %d/%d returned %s",
+                idx, attempt, retries, last_err,
+            )
+
+        # All Voxtral attempts failed — fall back to Whisper for this chunk.
+        log.warning(
+            "voxtral: chunk %d falling back to whisper after %d failed attempts (last=%s)",
+            idx, retries, last_err,
+        )
+        # Reset progress so the fallback's progress bar starts clean.
+        progress_cb(0.0)
+        from .whisper import WhisperEngine  # local import: avoid import cycles
+        return await WhisperEngine().transcribe(
+            chunk.path,
+            language=language,
+            timeout=timeout,
+            progress=progress_cb,
         )
 
     # ---------------------------------------------------------------- single
